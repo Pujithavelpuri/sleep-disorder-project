@@ -79,20 +79,14 @@ def load_excel_dataset():
             df = pd.read_excel(excel_file, engine='openpyxl')
             st.sidebar.success(f"✅ Loaded dataset from {excel_file}")
             
-            # Display basic info about the dataset
-            st.sidebar.write(f"**Rows:** {len(df)}")
-            st.sidebar.write(f"**Columns:** {len(df.columns)}")
-            st.sidebar.write(f"**Columns:** {', '.join(df.columns.tolist())}")
+            # Clean the dataset
+            # 1. Drop rows with NaN in Sleep Disorder
+            df = df.dropna(subset=['Sleep Disorder'])
             
-            # Check for Sleep Disorder column
-            if 'Sleep Disorder' not in df.columns:
-                st.sidebar.error("⚠️ 'Sleep Disorder' column not found!")
-                # Look for similar columns
-                similar_cols = [col for col in df.columns if 'disorder' in col.lower() or 'sleep' in col.lower()]
-                if similar_cols:
-                    st.sidebar.info(f"Similar columns found: {similar_cols}")
+            # 2. Reset index
+            df = df.reset_index(drop=True)
             
-            # Process the dataset (split blood pressure if needed)
+            # 3. Split blood pressure if needed
             if 'Blood Pressure' in df.columns and 'Systolic_BP' not in df.columns:
                 try:
                     # Handle potential formatting issues
@@ -102,6 +96,15 @@ def load_excel_dataset():
                     st.sidebar.info("✓ Split Blood Pressure into Systolic and Diastolic")
                 except Exception as e:
                     st.sidebar.warning(f"Could not split Blood Pressure: {str(e)}")
+            
+            # 4. Drop Person ID if it exists (not needed for prediction)
+            if 'Person ID' in df.columns:
+                df = df.drop(columns=['Person ID'])
+            
+            # Display basic info about the dataset
+            st.sidebar.write(f"**Rows:** {len(df)}")
+            st.sidebar.write(f"**Columns:** {len(df.columns)}")
+            st.sidebar.write(f"**Columns:** {', '.join(df.columns.tolist())}")
             
             # Save as CSV for backup and faster loading next time
             df.to_csv('sleep_cleaned.csv', index=False)
@@ -125,7 +128,7 @@ def train_model():
     
     if df is None:
         st.error("Failed to load dataset")
-        return None, None, None, None, None, None, None
+        return None, None, None, None, None, None, None, None
     
     # Display dataset info in main area
     st.success("✅ Dataset loaded successfully!")
@@ -133,12 +136,6 @@ def train_model():
     with st.expander("📊 Dataset Overview", expanded=True):
         st.write("**First few rows:**")
         st.dataframe(df.head())
-        
-        # Check for 'Sleep Disorder' column
-        if 'Sleep Disorder' not in df.columns:
-            st.error("❌ Column 'Sleep Disorder' not found in the dataset!")
-            st.write("Available columns:", df.columns.tolist())
-            return None, None, None, None, None, None, None
         
         # Show distribution of target variable
         st.write("**Target Variable Distribution:**")
@@ -246,11 +243,12 @@ def train_model():
         joblib.dump(target_encoder, 'target_encoder.pkl')
         joblib.dump(feature_names, 'feature_names.pkl')
         joblib.dump(scaler, 'scaler.pkl')
+        joblib.dump(numerical_cols, 'numerical_cols.pkl')
         st.sidebar.success("✅ Model saved successfully!")
     except Exception as e:
         st.sidebar.warning(f"Could not save model files: {str(e)}")
     
-    return model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler
+    return model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler, numerical_cols
 
 # Main app
 def main():
@@ -259,7 +257,7 @@ def main():
         model_data = train_model()
         
         if model_data[0] is not None:
-            model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler = model_data
+            model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler, numerical_cols = model_data
             
             # Sidebar content
             with st.sidebar:
@@ -285,8 +283,6 @@ def main():
             
             # Get feature names from dataset to create dynamic form
             categorical_features = [col for col in feature_encoders.keys()]
-            numerical_features = [col for col in feature_names if col not in categorical_features and col not in ['Systolic_BP', 'Diastolic_BP']]
-            bp_features = ['Systolic_BP', 'Diastolic_BP'] if all(f in feature_names for f in ['Systolic_BP', 'Diastolic_BP']) else []
             
             # Create two columns for better layout
             col1, col2 = st.columns(2)
@@ -294,60 +290,62 @@ def main():
             input_dict = {}
             
             with col1:
-                # Age input (if present)
-                if 'Age' in numerical_features:
+                # Age input
+                if 'Age' in feature_names:
                     input_dict['Age'] = st.number_input("Age", min_value=1, max_value=100, value=30, step=1)
                 
-                # Gender input (if present)
+                # Gender input
                 if 'Gender' in categorical_features:
                     gender_options = feature_encoders['Gender'].classes_.tolist() if 'Gender' in feature_encoders else ["Male", "Female"]
                     input_dict['Gender'] = st.selectbox("Gender", gender_options)
                 
-                # Occupation input (if present)
+                # Occupation input
                 if 'Occupation' in categorical_features:
                     occupation_options = feature_encoders['Occupation'].classes_.tolist() if 'Occupation' in feature_encoders else []
                     input_dict['Occupation'] = st.selectbox("Occupation", occupation_options)
                 
-                # Sleep Duration (if present)
-                if 'Sleep Duration' in numerical_features:
+                # Sleep Duration
+                if 'Sleep Duration' in feature_names:
                     input_dict['Sleep Duration'] = st.slider("Sleep Duration (hours)", 3.0, 10.0, 7.0, step=0.1)
                 
-                # Quality of Sleep (if present)
-                if 'Quality of Sleep' in numerical_features:
+                # Quality of Sleep
+                if 'Quality of Sleep' in feature_names:
                     input_dict['Quality of Sleep'] = st.slider("Quality of Sleep (1-10)", 1, 10, 6)
                 
-                # Physical Activity Level (if present)
-                if 'Physical Activity Level' in numerical_features:
+                # Physical Activity Level
+                if 'Physical Activity Level' in feature_names:
                     input_dict['Physical Activity Level'] = st.slider("Physical Activity Level (minutes/day)", 0, 120, 60)
             
             with col2:
-                # Stress Level (if present)
-                if 'Stress Level' in numerical_features:
+                # Stress Level
+                if 'Stress Level' in feature_names:
                     input_dict['Stress Level'] = st.slider("Stress Level (1-10)", 1, 10, 5)
                 
-                # BMI Category (if present)
+                # BMI Category
                 if 'BMI Category' in categorical_features:
                     bmi_options = feature_encoders['BMI Category'].classes_.tolist() if 'BMI Category' in feature_encoders else ["Normal", "Overweight", "Obese"]
                     input_dict['BMI Category'] = st.selectbox("BMI Category", bmi_options)
                 
-                # Blood Pressure input (if systolic and diastolic are present)
-                if bp_features:
+                # Blood Pressure input
+                if 'Systolic_BP' in feature_names and 'Diastolic_BP' in feature_names:
                     st.markdown("**Blood Pressure**")
                     bp_col1, bp_col2 = st.columns(2)
                     with bp_col1:
                         systolic = st.number_input("Systolic", min_value=80, max_value=200, value=120)
                     with bp_col2:
                         diastolic = st.number_input("Diastolic", min_value=50, max_value=130, value=80)
+                    
+                    # Store both the combined and split values
                     input_dict['Blood Pressure'] = f"{systolic}/{diastolic}"
                     input_dict['Systolic_BP'] = systolic
                     input_dict['Diastolic_BP'] = diastolic
                 
-                # Heart Rate (if present)
-                if 'Heart Rate' in numerical_features:
+                # Heart Rate
+                if 'Heart Rate' in feature_names:
                     input_dict['Heart Rate'] = st.number_input("Heart Rate (bpm)", min_value=40, max_value=150, value=70)
                 
-                # Daily Steps (if present)
-                if 'Daily Steps' in numerical_features:
+                # Daily Steps
+                if 'Daily Steps' in feature_names:
                     input_dict['Daily Steps'] = st.number_input("Daily Steps", min_value=0, max_value=20000, value=5000, step=100)
             
             # Prediction button
@@ -369,27 +367,34 @@ def main():
                             # Handle unknown categories
                             try:
                                 input_encoded[col] = feature_encoders[col].transform(input_encoded[col].astype(str))
-                                st.write(f"Encoded {col}: {input_dict[col]} -> {input_encoded[col].values[0]}")
+                                st.write(f"Encoded {col}: {input_dict[col]} → {input_encoded[col].values[0]}")
                             except ValueError as e:
                                 st.warning(f"Unknown {col} value '{input_dict[col]}'. Using most common class.")
-                                # Use the most frequent class
+                                # Use the most frequent class (0)
                                 input_encoded[col] = 0
                     
                     # Make sure all feature columns are present and in correct order
                     for col in feature_names:
                         if col not in input_encoded.columns:
+                            # For missing numerical columns, use 0
                             input_encoded[col] = 0
                             st.write(f"Added missing column {col} with default value 0")
                     
+                    # Reorder columns to match feature_names
                     input_encoded = input_encoded[feature_names]
                     
-                    st.write("**Encoded input:**")
+                    st.write("**Encoded input (before scaling):**")
                     st.dataframe(input_encoded)
                     
                     # Scale numerical features
-                    numerical_cols = [col for col in feature_names if col in numerical_features]
                     if numerical_cols and scaler is not None:
-                        input_encoded[numerical_cols] = scaler.transform(input_encoded[numerical_cols])
+                        # Get the numerical columns that are in the input
+                        cols_to_scale = [col for col in numerical_cols if col in input_encoded.columns]
+                        if cols_to_scale:
+                            input_encoded[cols_to_scale] = scaler.transform(input_encoded[cols_to_scale])
+                    
+                    st.write("**Encoded input (after scaling):**")
+                    st.dataframe(input_encoded)
                     
                     # Make prediction
                     prediction_encoded = model.predict(input_encoded)[0]
@@ -407,7 +412,7 @@ def main():
                     st.success("✅ Prediction Complete!")
                     
                     # Define colors and icons for each prediction
-                    if prediction == "None":
+                    if prediction == "None" or prediction == "None ":
                         bg_color = "#28a745"
                         icon = "✅"
                         description = "No sleep disorder detected. Your sleep patterns appear normal."
@@ -415,10 +420,14 @@ def main():
                         bg_color = "#ffc107"
                         icon = "🌙"
                         description = "Insomnia detected. You may have difficulty falling or staying asleep."
-                    else:  # Sleep Apnea
+                    elif prediction == "Sleep Apnea":
                         bg_color = "#dc3545"
                         icon = "⚠️"
                         description = "Sleep Apnea detected. Your breathing may be interrupted during sleep."
+                    else:
+                        bg_color = "#6c757d"
+                        icon = "❓"
+                        description = f"Prediction: {prediction}"
                     
                     # Display prediction with styling
                     st.markdown(
@@ -465,7 +474,7 @@ def main():
                     # Additional health recommendations
                     st.subheader("💡 Health Recommendations")
                     
-                    if prediction == "None":
+                    if prediction == "None" or prediction == "None ":
                         st.info("""
                         ✅ **Maintain your current healthy habits:**
                         - Stick to your consistent sleep schedule
@@ -483,7 +492,7 @@ def main():
                         - Consider cognitive behavioral therapy for insomnia (CBT-I)
                         - Consult a sleep specialist if symptoms persist
                         """)
-                    else:  # Sleep Apnea
+                    elif prediction == "Sleep Apnea":
                         st.error("""
                         ⚠️ **Important steps to take:**
                         - **Consult a healthcare provider immediately** for proper diagnosis
@@ -495,6 +504,8 @@ def main():
                         - Elevate the head of your bed
                         - Quit smoking if applicable
                         """)
+                    else:
+                        st.info(f"Prediction: {prediction}. Please consult a healthcare provider for proper interpretation.")
                         
                 except Exception as e:
                     st.error(f"Error in prediction: {str(e)}")
@@ -505,6 +516,7 @@ def main():
                     st.write(f"Feature names from model: {feature_names}")
                     st.write(f"Input data columns: {input_data.columns.tolist()}")
                     st.write(f"Categorical features: {list(feature_encoders.keys())}")
+                    st.write(f"Numerical features: {numerical_cols}")
         else:
             st.error("Failed to load model. Please check if the Excel file exists and has the correct format.")
 
