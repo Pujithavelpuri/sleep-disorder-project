@@ -77,7 +77,7 @@ def load_excel_dataset():
         try:
             # Try reading with openpyxl engine
             df = pd.read_excel(excel_file, engine='openpyxl')
-            st.sidebar.success(f"✅ Loaded dataset from {excel_file}")
+            
             
             # Clean the dataset
             # 1. Replace NaN in Sleep Disorder with 'None'
@@ -98,9 +98,9 @@ def load_excel_dataset():
                     df['Systolic_BP'] = df['Systolic_BP'].fillna(df['Systolic_BP'].median())
                     df['Diastolic_BP'] = df['Diastolic_BP'].fillna(df['Diastolic_BP'].median())
                     
-                    st.sidebar.info("✓ Split Blood Pressure into Systolic and Diastolic")
+                    
                 except Exception as e:
-                    st.sidebar.warning(f"Could not split Blood Pressure: {str(e)}")
+                    
             
             # 4. Drop Person ID if it exists (not needed for prediction)
             if 'Person ID' in df.columns:
@@ -117,13 +117,11 @@ def load_excel_dataset():
                 df[col] = df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else 'Unknown')
             
             # Display basic info about the dataset
-            st.sidebar.write(f"**Rows:** {len(df)}")
-            st.sidebar.write(f"**Columns:** {len(df.columns)}")
-            st.sidebar.write(f"**Columns:** {', '.join(df.columns.tolist())}")
+            
             
             # Save as CSV for backup and faster loading next time
             df.to_csv('sleep_cleaned.csv', index=False)
-            st.sidebar.info("✓ Saved backup as CSV")
+            
             
             return df
         except Exception as e:
@@ -640,3 +638,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
