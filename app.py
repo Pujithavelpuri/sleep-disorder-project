@@ -213,9 +213,7 @@ def main():
                 
                 st.divider()
                 
-                st.header("🔝 Top Features")
-                for i, row in feature_importance.head(5).iterrows():
-                    st.write(f"{i+1}. **{row['feature']}**")
+                
             
             # Create input form
             st.header("📋 Enter Patient Details")
@@ -466,3 +464,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
