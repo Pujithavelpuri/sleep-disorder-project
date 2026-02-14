@@ -80,8 +80,8 @@ def load_excel_dataset():
             st.sidebar.success(f"✅ Loaded dataset from {excel_file}")
             
             # Clean the dataset
-            # 1. Drop rows with NaN in Sleep Disorder
-            df = df.dropna(subset=['Sleep Disorder'])
+            # 1. Replace NaN in Sleep Disorder with 'None'
+            df['Sleep Disorder'] = df['Sleep Disorder'].fillna('None')
             
             # 2. Reset index
             df = df.reset_index(drop=True)
@@ -145,10 +145,6 @@ def train_model():
         # Create a bar chart of the distribution
         st.bar_chart(target_dist)
         
-        # Check if there's class imbalance
-        if len(target_dist) < 3:
-            st.warning(f"⚠️ Only {len(target_dist)} classes found in the data. Expected 3 classes (None, Insomnia, Sleep Apnea)")
-        
         # Show data types
         st.write("**Data Types:**")
         st.dataframe(df.dtypes)
@@ -191,10 +187,10 @@ def train_model():
     
     # Train model with balanced class weights
     model = RandomForestClassifier(
-        n_estimators=200,
-        max_depth=10,
-        min_samples_split=10,
-        min_samples_leaf=5,
+        n_estimators=300,  # Increased number of trees
+        max_depth=15,  # Increased depth
+        min_samples_split=5,
+        min_samples_leaf=2,
         class_weight='balanced',  # Important for imbalanced datasets
         random_state=42
     )
@@ -229,12 +225,21 @@ def train_model():
     
     # Test predictions on sample data
     st.write("**Sample predictions on test data:**")
-    sample_pred = model.predict(X_test[:5])
+    sample_pred = model.predict(X_test[:10])
     sample_pred_labels = target_encoder.inverse_transform(sample_pred)
-    sample_actual = target_encoder.inverse_transform(y_test[:5])
+    sample_actual = target_encoder.inverse_transform(y_test[:10])
     
-    for i, (pred, actual) in enumerate(zip(sample_pred_labels, sample_actual)):
-        st.write(f"Sample {i+1}: Predicted={pred}, Actual={actual}")
+    results_df = pd.DataFrame({
+        'Actual': sample_actual,
+        'Predicted': sample_pred_labels
+    })
+    st.dataframe(results_df)
+    
+    # Show confusion matrix as text
+    from sklearn.metrics import confusion_matrix
+    cm = confusion_matrix(y_test, sample_pred)
+    st.write("**Confusion Matrix (first 10 samples):**")
+    st.write(cm)
     
     # Save model and encoders
     try:
@@ -269,7 +274,9 @@ def main():
                 # Show class names
                 st.write("**Classes:**")
                 for cls in target_encoder.classes_:
-                    st.write(f"  - {cls}")
+                    # Count occurrences in training data
+                    count = len(y_train[y_train == target_encoder.transform([cls])[0]])
+                    st.write(f"  - {cls}: {count} samples")
                 
                 st.divider()
                 
@@ -292,7 +299,7 @@ def main():
             with col1:
                 # Age input
                 if 'Age' in feature_names:
-                    input_dict['Age'] = st.number_input("Age", min_value=1, max_value=100, value=30, step=1)
+                    input_dict['Age'] = st.number_input("Age", min_value=1, max_value=100, value=45, step=1)
                 
                 # Gender input
                 if 'Gender' in categorical_features:
@@ -306,20 +313,20 @@ def main():
                 
                 # Sleep Duration
                 if 'Sleep Duration' in feature_names:
-                    input_dict['Sleep Duration'] = st.slider("Sleep Duration (hours)", 3.0, 10.0, 7.0, step=0.1)
+                    input_dict['Sleep Duration'] = st.slider("Sleep Duration (hours)", 3.0, 10.0, 6.5, step=0.1)
                 
                 # Quality of Sleep
                 if 'Quality of Sleep' in feature_names:
-                    input_dict['Quality of Sleep'] = st.slider("Quality of Sleep (1-10)", 1, 10, 6)
+                    input_dict['Quality of Sleep'] = st.slider("Quality of Sleep (1-10)", 1, 10, 6, step=1)
                 
                 # Physical Activity Level
                 if 'Physical Activity Level' in feature_names:
-                    input_dict['Physical Activity Level'] = st.slider("Physical Activity Level (minutes/day)", 0, 120, 60)
+                    input_dict['Physical Activity Level'] = st.slider("Physical Activity Level (minutes/day)", 0, 120, 50, step=5)
             
             with col2:
                 # Stress Level
                 if 'Stress Level' in feature_names:
-                    input_dict['Stress Level'] = st.slider("Stress Level (1-10)", 1, 10, 5)
+                    input_dict['Stress Level'] = st.slider("Stress Level (1-10)", 1, 10, 6, step=1)
                 
                 # BMI Category
                 if 'BMI Category' in categorical_features:
@@ -331,9 +338,9 @@ def main():
                     st.markdown("**Blood Pressure**")
                     bp_col1, bp_col2 = st.columns(2)
                     with bp_col1:
-                        systolic = st.number_input("Systolic", min_value=80, max_value=200, value=120)
+                        systolic = st.number_input("Systolic", min_value=80, max_value=200, value=130)
                     with bp_col2:
-                        diastolic = st.number_input("Diastolic", min_value=50, max_value=130, value=80)
+                        diastolic = st.number_input("Diastolic", min_value=50, max_value=130, value=85)
                     
                     # Store both the combined and split values
                     input_dict['Blood Pressure'] = f"{systolic}/{diastolic}"
@@ -342,14 +349,86 @@ def main():
                 
                 # Heart Rate
                 if 'Heart Rate' in feature_names:
-                    input_dict['Heart Rate'] = st.number_input("Heart Rate (bpm)", min_value=40, max_value=150, value=70)
+                    input_dict['Heart Rate'] = st.number_input("Heart Rate (bpm)", min_value=40, max_value=150, value=75)
                 
                 # Daily Steps
                 if 'Daily Steps' in feature_names:
-                    input_dict['Daily Steps'] = st.number_input("Daily Steps", min_value=0, max_value=20000, value=5000, step=100)
+                    input_dict['Daily Steps'] = st.number_input("Daily Steps", min_value=0, max_value=20000, value=6000, step=100)
+            
+            # Add test buttons for different scenarios
+            st.markdown("---")
+            col1, col2, col3 = st.columns(3)
+            
+            with col1:
+                if st.button("🧪 Test: Healthy Profile"):
+                    # Set values for a healthy person (should predict None)
+                    input_dict = {
+                        'Age': 30,
+                        'Gender': 'Female',
+                        'Occupation': 'Engineer',
+                        'Sleep Duration': 8.0,
+                        'Quality of Sleep': 9,
+                        'Physical Activity Level': 80,
+                        'Stress Level': 3,
+                        'BMI Category': 'Normal',
+                        'Blood Pressure': '118/75',
+                        'Systolic_BP': 118,
+                        'Diastolic_BP': 75,
+                        'Heart Rate': 68,
+                        'Daily Steps': 9000
+                    }
+                    st.session_state['test_input'] = input_dict
+                    st.rerun()
+            
+            with col2:
+                if st.button("🧪 Test: Insomnia Profile"):
+                    # Set values for insomnia
+                    input_dict = {
+                        'Age': 35,
+                        'Gender': 'Female',
+                        'Occupation': 'Teacher',
+                        'Sleep Duration': 5.0,
+                        'Quality of Sleep': 3,
+                        'Physical Activity Level': 30,
+                        'Stress Level': 8,
+                        'BMI Category': 'Normal',
+                        'Blood Pressure': '125/82',
+                        'Systolic_BP': 125,
+                        'Diastolic_BP': 82,
+                        'Heart Rate': 78,
+                        'Daily Steps': 4000
+                    }
+                    st.session_state['test_input'] = input_dict
+                    st.rerun()
+            
+            with col3:
+                if st.button("🧪 Test: Sleep Apnea Profile"):
+                    # Set values for sleep apnea
+                    input_dict = {
+                        'Age': 55,
+                        'Gender': 'Male',
+                        'Occupation': 'Manager',
+                        'Sleep Duration': 6.0,
+                        'Quality of Sleep': 4,
+                        'Physical Activity Level': 35,
+                        'Stress Level': 7,
+                        'BMI Category': 'Obese',
+                        'Blood Pressure': '140/90',
+                        'Systolic_BP': 140,
+                        'Diastolic_BP': 90,
+                        'Heart Rate': 82,
+                        'Daily Steps': 4500
+                    }
+                    st.session_state['test_input'] = input_dict
+                    st.rerun()
+            
+            # Check if there's a test input in session state
+            if 'test_input' in st.session_state:
+                input_dict = st.session_state['test_input']
+                st.info("Using test profile. You can modify the values above.")
             
             # Prediction button
-            if st.button("🔍 Predict Sleep Disorder", type="primary"):
+            if st.button("🔍 Predict Sleep Disorder", type="primary") or 'test_input' in st.session_state:
                 
                 # Create DataFrame
                 input_data = pd.DataFrame([input_dict])
@@ -383,9 +462,6 @@ def main():
                     # Reorder columns to match feature_names
                     input_encoded = input_encoded[feature_names]
                     
-                    st.write("**Encoded input (before scaling):**")
-                    st.dataframe(input_encoded)
-                    
                     # Scale numerical features
                     if numerical_cols and scaler is not None:
                         # Get the numerical columns that are in the input
@@ -393,26 +469,18 @@ def main():
                         if cols_to_scale:
                             input_encoded[cols_to_scale] = scaler.transform(input_encoded[cols_to_scale])
                     
-                    st.write("**Encoded input (after scaling):**")
-                    st.dataframe(input_encoded)
-                    
                     # Make prediction
                     prediction_encoded = model.predict(input_encoded)[0]
                     prediction_proba = model.predict_proba(input_encoded)[0]
                     
-                    st.write(f"**Raw prediction encoded:** {prediction_encoded}")
-                    st.write(f"**Prediction probabilities:** {prediction_proba}")
-                    
                     # Decode prediction
                     prediction = target_encoder.inverse_transform([prediction_encoded])[0]
-                    
-                    st.write(f"**Decoded prediction:** {prediction}")
                     
                     # Display results
                     st.success("✅ Prediction Complete!")
                     
                     # Define colors and icons for each prediction
-                    if prediction == "None" or prediction == "None ":
+                    if prediction == "None":
                         bg_color = "#28a745"
                         icon = "✅"
                         description = "No sleep disorder detected. Your sleep patterns appear normal."
@@ -474,7 +542,7 @@ def main():
                     # Additional health recommendations
                     st.subheader("💡 Health Recommendations")
                     
-                    if prediction == "None" or prediction == "None ":
+                    if prediction == "None":
                         st.info("""
                         ✅ **Maintain your current healthy habits:**
                         - Stick to your consistent sleep schedule
@@ -506,10 +574,14 @@ def main():
                         """)
                     else:
                         st.info(f"Prediction: {prediction}. Please consult a healthcare provider for proper interpretation.")
+                    
+                    # Clear test input from session state after prediction
+                    if 'test_input' in st.session_state:
+                        del st.session_state['test_input']
                         
                 except Exception as e:
                     st.error(f"Error in prediction: {str(e)}")
-                    st.exception(e)  # This will show the full error traceback
+                    st.exception(e)
                     
                     # Try to diagnose the issue
                     st.write("**Debug information:**")
