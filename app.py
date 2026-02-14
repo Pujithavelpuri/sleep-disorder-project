@@ -4,7 +4,7 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-from sklearn.preprocessing import LabelEncoder
+from sklearn.preprocessing import LabelEncoder, StandardScaler
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.model_selection import train_test_split
 import os
@@ -50,12 +50,6 @@ if not OPENPYXL_AVAILABLE:
     openpyxl
     ```
     
-    **Option 3: Install directly in the app**
-    ```python
-    import subprocess
-    subprocess.check_call([sys.executable, "-m", "pip", "install", "openpyxl"])
-    ```
-    
     After installing, please restart the app.
     """)
     
@@ -90,12 +84,21 @@ def load_excel_dataset():
             st.sidebar.write(f"**Columns:** {len(df.columns)}")
             st.sidebar.write(f"**Columns:** {', '.join(df.columns.tolist())}")
             
+            # Check for Sleep Disorder column
+            if 'Sleep Disorder' not in df.columns:
+                st.sidebar.error("⚠️ 'Sleep Disorder' column not found!")
+                # Look for similar columns
+                similar_cols = [col for col in df.columns if 'disorder' in col.lower() or 'sleep' in col.lower()]
+                if similar_cols:
+                    st.sidebar.info(f"Similar columns found: {similar_cols}")
+            
             # Process the dataset (split blood pressure if needed)
             if 'Blood Pressure' in df.columns and 'Systolic_BP' not in df.columns:
                 try:
-                    df[['Systolic_BP', 'Diastolic_BP']] = (
-                        df['Blood Pressure'].str.split("/", expand=True).astype(int)
-                    )
+                    # Handle potential formatting issues
+                    bp_split = df['Blood Pressure'].str.split("/", expand=True)
+                    df['Systolic_BP'] = pd.to_numeric(bp_split[0], errors='coerce')
+                    df['Diastolic_BP'] = pd.to_numeric(bp_split[1], errors='coerce')
                     st.sidebar.info("✓ Split Blood Pressure into Systolic and Diastolic")
                 except Exception as e:
                     st.sidebar.warning(f"Could not split Blood Pressure: {str(e)}")
@@ -107,69 +110,51 @@ def load_excel_dataset():
             return df
         except Exception as e:
             st.error(f"Error loading Excel file: {str(e)}")
-            st.info("Trying alternative method...")
-            
-            # Try alternative method without specifying engine
-            try:
-                df = pd.read_excel(excel_file)
-                return df
-            except:
-                return None
+            return None
     else:
         st.error(f"❌ Excel file '{excel_file}' not found in root directory!")
-        st.info("Please ensure 'sleep_disorder_powerbi.xlsx' is in the same directory as this app.")
-        
-        # Show current directory contents
-        st.write("Files in current directory:")
-        files = os.listdir('.')
-        for file in files:
-            st.write(f"- {file}")
         return None
 
-# Alternative function to load CSV if Excel fails
-@st.cache_resource
-def load_csv_dataset():
-    """Load the sleep disorder dataset from CSV file (backup)"""
-    csv_file = "sleep_cleaned.csv"
-    
-    if os.path.exists(csv_file):
-        try:
-            df = pd.read_csv(csv_file)
-            st.sidebar.success(f"✅ Loaded dataset from {csv_file} (backup)")
-            return df
-        except Exception as e:
-            st.error(f"Error loading CSV file: {str(e)}")
-            return None
-    return None
-
-# Function to train the model
+# Function to train the model with debugging
 @st.cache_resource
 def train_model():
-    """Train the Random Forest model on the dataset"""
+    """Train the Random Forest model on the dataset with debugging"""
     
-    # First try to load from Excel
+    # Load from Excel
     df = load_excel_dataset()
     
-    # If Excel fails, try CSV backup
     if df is None:
-        st.warning("Trying to load from CSV backup...")
-        df = load_csv_dataset()
+        st.error("Failed to load dataset")
+        return None, None, None, None, None, None, None
     
-    # If both fail, show error
-    if df is None:
-        st.error("Failed to load dataset from any source")
-        return None, None, None, None, None, None
+    # Display dataset info in main area
+    st.success("✅ Dataset loaded successfully!")
     
-    # Check if 'Sleep Disorder' column exists
-    if 'Sleep Disorder' not in df.columns:
-        st.error("Column 'Sleep Disorder' not found in the dataset!")
-        st.write("Available columns:", df.columns.tolist())
+    with st.expander("📊 Dataset Overview", expanded=True):
+        st.write("**First few rows:**")
+        st.dataframe(df.head())
         
-        # Look for similar column names
-        possible_targets = [col for col in df.columns if 'sleep' in col.lower() or 'disorder' in col.lower()]
-        if possible_targets:
-            st.info(f"Did you mean one of these columns? {possible_targets}")
-        return None, None, None, None, None, None
+        # Check for 'Sleep Disorder' column
+        if 'Sleep Disorder' not in df.columns:
+            st.error("❌ Column 'Sleep Disorder' not found in the dataset!")
+            st.write("Available columns:", df.columns.tolist())
+            return None, None, None, None, None, None, None
+        
+        # Show distribution of target variable
+        st.write("**Target Variable Distribution:**")
+        target_dist = df['Sleep Disorder'].value_counts()
+        st.dataframe(target_dist)
+        
+        # Create a bar chart of the distribution
+        st.bar_chart(target_dist)
+        
+        # Check if there's class imbalance
+        if len(target_dist) < 3:
+            st.warning(f"⚠️ Only {len(target_dist)} classes found in the data. Expected 3 classes (None, Insomnia, Sleep Apnea)")
+        
+        # Show data types
+        st.write("**Data Types:**")
+        st.dataframe(df.dtypes)
     
     # Prepare features and target
     X = df.drop(columns=['Sleep Disorder'])
@@ -178,47 +163,42 @@ def train_model():
     # Store feature names for later use
     feature_names = X.columns.tolist()
     
-    # Display dataset info in main area
-    st.success("✅ Dataset loaded successfully!")
-    
-    with st.expander("📊 Dataset Overview"):
-        col1, col2, col3 = st.columns(3)
-        col1.metric("Total Records", len(df))
-        col2.metric("Features", len(feature_names))
-        col3.metric("Target Classes", y.nunique())
-        
-        st.write("**First few rows:**")
-        st.dataframe(df.head())
-    
     # Identify categorical and numerical columns
     categorical_cols = X.select_dtypes(include=["object"]).columns.tolist()
     numerical_cols = X.select_dtypes(include=[np.number]).columns.tolist()
+    
+    st.write(f"**Categorical features:** {categorical_cols}")
+    st.write(f"**Numerical features:** {numerical_cols}")
     
     # Encode categorical variables
     feature_encoders = {}
     for col in categorical_cols:
         le = LabelEncoder()
+        # Handle any NaN values
+        X[col] = X[col].fillna('Unknown')
         X[col] = le.fit_transform(X[col].astype(str))
         feature_encoders[col] = le
+        st.write(f"Encoded {col} with {len(le.classes_)} classes: {le.classes_.tolist()}")
     
     # Encode target
     target_encoder = LabelEncoder()
     y_encoded = target_encoder.fit_transform(y)
     
-    # Display class distribution
-    st.write("**Class Distribution:**")
-    class_dist = pd.DataFrame({
-        'Class': target_encoder.classes_,
-        'Count': pd.Series(y_encoded).value_counts().sort_index().values
-    })
-    st.dataframe(class_dist)
+    st.write(f"**Target classes:** {target_encoder.classes_.tolist()}")
+    st.write(f"**Target distribution after encoding:** {pd.Series(y_encoded).value_counts().to_dict()}")
     
-    # Train model
+    # Scale numerical features
+    scaler = StandardScaler()
+    if numerical_cols:
+        X[numerical_cols] = scaler.fit_transform(X[numerical_cols])
+    
+    # Train model with balanced class weights
     model = RandomForestClassifier(
         n_estimators=200,
-        max_depth=15,
-        min_samples_split=5,
-        min_samples_leaf=2,
+        max_depth=10,
+        min_samples_split=10,
+        min_samples_leaf=5,
+        class_weight='balanced',  # Important for imbalanced datasets
         random_state=42
     )
     
@@ -226,6 +206,9 @@ def train_model():
     X_train, X_test, y_train, y_test = train_test_split(
         X, y_encoded, test_size=0.2, random_state=42, stratify=y_encoded
     )
+    
+    st.write(f"**Training set size:** {len(X_train)}")
+    st.write(f"**Test set size:** {len(X_test)}")
     
     # Train the model
     with st.spinner("Training model..."):
@@ -235,11 +218,26 @@ def train_model():
     train_score = model.score(X_train, y_train)
     test_score = model.score(X_test, y_test)
     
+    st.write(f"**Training accuracy:** {train_score:.2%}")
+    st.write(f"**Testing accuracy:** {test_score:.2%}")
+    
     # Feature importance
     feature_importance = pd.DataFrame({
         'feature': feature_names,
         'importance': model.feature_importances_
     }).sort_values('importance', ascending=False)
+    
+    st.write("**Top 5 important features:**")
+    st.dataframe(feature_importance.head(5))
+    
+    # Test predictions on sample data
+    st.write("**Sample predictions on test data:**")
+    sample_pred = model.predict(X_test[:5])
+    sample_pred_labels = target_encoder.inverse_transform(sample_pred)
+    sample_actual = target_encoder.inverse_transform(y_test[:5])
+    
+    for i, (pred, actual) in enumerate(zip(sample_pred_labels, sample_actual)):
+        st.write(f"Sample {i+1}: Predicted={pred}, Actual={actual}")
     
     # Save model and encoders
     try:
@@ -247,11 +245,12 @@ def train_model():
         joblib.dump(feature_encoders, 'feature_encoders.pkl')
         joblib.dump(target_encoder, 'target_encoder.pkl')
         joblib.dump(feature_names, 'feature_names.pkl')
+        joblib.dump(scaler, 'scaler.pkl')
         st.sidebar.success("✅ Model saved successfully!")
     except Exception as e:
         st.sidebar.warning(f"Could not save model files: {str(e)}")
     
-    return model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance
+    return model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler
 
 # Main app
 def main():
@@ -260,7 +259,7 @@ def main():
         model_data = train_model()
         
         if model_data[0] is not None:
-            model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance = model_data
+            model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler = model_data
             
             # Sidebar content
             with st.sidebar:
@@ -357,31 +356,52 @@ def main():
                 # Create DataFrame
                 input_data = pd.DataFrame([input_dict])
                 
+                st.write("**Input data for prediction:**")
+                st.dataframe(input_data)
+                
                 try:
+                    # Make a copy for encoding
+                    input_encoded = input_data.copy()
+                    
                     # Encode categorical variables using saved encoders
                     for col in feature_encoders.keys():
-                        if col in input_data.columns:
+                        if col in input_encoded.columns:
                             # Handle unknown categories
                             try:
-                                input_data[col] = feature_encoders[col].transform(input_data[col].astype(str))
-                            except ValueError:
-                                # If category not seen during training, use the most common class
-                                st.warning(f"Unknown {col} value. Using default encoding.")
-                                input_data[col] = 0  # Default to first class
+                                input_encoded[col] = feature_encoders[col].transform(input_encoded[col].astype(str))
+                                st.write(f"Encoded {col}: {input_dict[col]} -> {input_encoded[col].values[0]}")
+                            except ValueError as e:
+                                st.warning(f"Unknown {col} value '{input_dict[col]}'. Using most common class.")
+                                # Use the most frequent class
+                                input_encoded[col] = 0
                     
                     # Make sure all feature columns are present and in correct order
                     for col in feature_names:
-                        if col not in input_data.columns:
-                            input_data[col] = 0  # Add missing columns with default value
+                        if col not in input_encoded.columns:
+                            input_encoded[col] = 0
+                            st.write(f"Added missing column {col} with default value 0")
                     
-                    input_data = input_data[feature_names]
+                    input_encoded = input_encoded[feature_names]
+                    
+                    st.write("**Encoded input:**")
+                    st.dataframe(input_encoded)
+                    
+                    # Scale numerical features
+                    numerical_cols = [col for col in feature_names if col in numerical_features]
+                    if numerical_cols and scaler is not None:
+                        input_encoded[numerical_cols] = scaler.transform(input_encoded[numerical_cols])
                     
                     # Make prediction
-                    prediction_encoded = model.predict(input_data)[0]
-                    prediction_proba = model.predict_proba(input_data)[0]
+                    prediction_encoded = model.predict(input_encoded)[0]
+                    prediction_proba = model.predict_proba(input_encoded)[0]
+                    
+                    st.write(f"**Raw prediction encoded:** {prediction_encoded}")
+                    st.write(f"**Prediction probabilities:** {prediction_proba}")
                     
                     # Decode prediction
                     prediction = target_encoder.inverse_transform([prediction_encoded])[0]
+                    
+                    st.write(f"**Decoded prediction:** {prediction}")
                     
                     # Display results
                     st.success("✅ Prediction Complete!")
@@ -478,27 +498,13 @@ def main():
                         
                 except Exception as e:
                     st.error(f"Error in prediction: {str(e)}")
-                    st.info("Please ensure all fields are filled correctly.")
-            
-            # Add information about the model and data source
-            with st.expander("ℹ️ About the Model & Data"):
-                st.markdown("""
-                **Model Information:**
-                - **Algorithm:** Random Forest Classifier (Ensemble Learning)
-                - **Data Source:** sleep_disorder_powerbi.xlsx (Excel file from root directory)
-                - **Features Used:** Various health and lifestyle indicators
-                - **Target Classes:** None, Insomnia, Sleep Apnea
-                
-                **Model Performance:**
-                - Trained on real health and lifestyle data
-                - Uses ensemble learning for robust predictions
-                - Feature importance analysis shows key predictors
-                
-                **⚠️ Medical Disclaimer:**
-                This tool is for educational and informational purposes only. 
-                It should not replace professional medical advice, diagnosis, or treatment. 
-                Always consult with a qualified healthcare provider for medical concerns.
-                """)
+                    st.exception(e)  # This will show the full error traceback
+                    
+                    # Try to diagnose the issue
+                    st.write("**Debug information:**")
+                    st.write(f"Feature names from model: {feature_names}")
+                    st.write(f"Input data columns: {input_data.columns.tolist()}")
+                    st.write(f"Categorical features: {list(feature_encoders.keys())}")
         else:
             st.error("Failed to load model. Please check if the Excel file exists and has the correct format.")
 
