@@ -93,6 +93,11 @@ def load_excel_dataset():
                     bp_split = df['Blood Pressure'].str.split("/", expand=True)
                     df['Systolic_BP'] = pd.to_numeric(bp_split[0], errors='coerce')
                     df['Diastolic_BP'] = pd.to_numeric(bp_split[1], errors='coerce')
+                    
+                    # Fill any NaN values with median
+                    df['Systolic_BP'] = df['Systolic_BP'].fillna(df['Systolic_BP'].median())
+                    df['Diastolic_BP'] = df['Diastolic_BP'].fillna(df['Diastolic_BP'].median())
+                    
                     st.sidebar.info("✓ Split Blood Pressure into Systolic and Diastolic")
                 except Exception as e:
                     st.sidebar.warning(f"Could not split Blood Pressure: {str(e)}")
@@ -100,6 +105,16 @@ def load_excel_dataset():
             # 4. Drop Person ID if it exists (not needed for prediction)
             if 'Person ID' in df.columns:
                 df = df.drop(columns=['Person ID'])
+            
+            # 5. Fill any remaining NaN values in numerical columns with median
+            numerical_cols = df.select_dtypes(include=[np.number]).columns
+            for col in numerical_cols:
+                df[col] = df[col].fillna(df[col].median())
+            
+            # 6. Fill any remaining NaN values in categorical columns with mode
+            categorical_cols = df.select_dtypes(include=["object"]).columns
+            for col in categorical_cols:
+                df[col] = df[col].fillna(df[col].mode()[0] if not df[col].mode().empty else 'Unknown')
             
             # Display basic info about the dataset
             st.sidebar.write(f"**Rows:** {len(df)}")
@@ -148,6 +163,10 @@ def train_model():
         # Show data types
         st.write("**Data Types:**")
         st.dataframe(df.dtypes)
+        
+        # Show basic statistics
+        st.write("**Basic Statistics:**")
+        st.dataframe(df.describe())
     
     # Prepare features and target
     X = df.drop(columns=['Sleep Disorder'])
@@ -178,21 +197,36 @@ def train_model():
     y_encoded = target_encoder.fit_transform(y)
     
     st.write(f"**Target classes:** {target_encoder.classes_.tolist()}")
-    st.write(f"**Target distribution after encoding:** {pd.Series(y_encoded).value_counts().to_dict()}")
+    
+    # Create a mapping of encoded values to class names
+    class_mapping = dict(zip(range(len(target_encoder.classes_)), target_encoder.classes_))
+    st.write(f"**Class mapping:** {class_mapping}")
+    
+    # Count samples per class
+    unique, counts = np.unique(y_encoded, return_counts=True)
+    class_counts = dict(zip([class_mapping[u] for u in unique], counts))
+    st.write(f"**Target distribution after encoding:** {class_counts}")
     
     # Scale numerical features
     scaler = StandardScaler()
     if numerical_cols:
         X[numerical_cols] = scaler.fit_transform(X[numerical_cols])
     
+    # Calculate class weights manually for better balance
+    from sklearn.utils.class_weight import compute_class_weight
+    class_weights = compute_class_weight('balanced', classes=np.unique(y_encoded), y=y_encoded)
+    class_weight_dict = dict(zip(np.unique(y_encoded), class_weights))
+    st.write(f"**Class weights:** {class_weight_dict}")
+    
     # Train model with balanced class weights
     model = RandomForestClassifier(
-        n_estimators=300,  # Increased number of trees
-        max_depth=15,  # Increased depth
+        n_estimators=300,
+        max_depth=15,
         min_samples_split=5,
         min_samples_leaf=2,
-        class_weight='balanced',  # Important for imbalanced datasets
-        random_state=42
+        class_weight='balanced',
+        random_state=42,
+        n_jobs=-1
     )
     
     # Split data for training
@@ -224,22 +258,28 @@ def train_model():
     st.dataframe(feature_importance.head(5))
     
     # Test predictions on sample data
-    st.write("**Sample predictions on test data:**")
-    sample_pred = model.predict(X_test[:10])
-    sample_pred_labels = target_encoder.inverse_transform(sample_pred)
-    sample_actual = target_encoder.inverse_transform(y_test[:10])
+    st.write("**Sample predictions on test data (first 10 samples):**")
     
+    # Get predictions for test set
+    y_pred = model.predict(X_test)
+    
+    # Convert back to original labels
+    y_test_labels = target_encoder.inverse_transform(y_test)
+    y_pred_labels = target_encoder.inverse_transform(y_pred)
+    
+    # Create a DataFrame with actual vs predicted for first 10 samples
     results_df = pd.DataFrame({
-        'Actual': sample_actual,
-        'Predicted': sample_pred_labels
+        'Actual': y_test_labels[:10],
+        'Predicted': y_pred_labels[:10]
     })
     st.dataframe(results_df)
     
-    # Show confusion matrix as text
-    from sklearn.metrics import confusion_matrix
-    cm = confusion_matrix(y_test, sample_pred)
-    st.write("**Confusion Matrix (first 10 samples):**")
-    st.write(cm)
+    # Calculate and display accuracy per class
+    from sklearn.metrics import classification_report
+    report = classification_report(y_test, y_pred, target_names=target_encoder.classes_, output_dict=True)
+    report_df = pd.DataFrame(report).transpose()
+    st.write("**Classification Report:**")
+    st.dataframe(report_df)
     
     # Save model and encoders
     try:
@@ -253,7 +293,7 @@ def train_model():
     except Exception as e:
         st.sidebar.warning(f"Could not save model files: {str(e)}")
     
-    return model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler, numerical_cols
+    return model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler, numerical_cols, class_mapping
 
 # Main app
 def main():
@@ -262,7 +302,7 @@ def main():
         model_data = train_model()
         
         if model_data[0] is not None:
-            model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler, numerical_cols = model_data
+            model, feature_encoders, target_encoder, feature_names, train_score, test_score, feature_importance, scaler, numerical_cols, class_mapping = model_data
             
             # Sidebar content
             with st.sidebar:
@@ -274,9 +314,7 @@ def main():
                 # Show class names
                 st.write("**Classes:**")
                 for cls in target_encoder.classes_:
-                    # Count occurrences in training data
-                    count = len(y_train[y_train == target_encoder.transform([cls])[0]])
-                    st.write(f"  - {cls}: {count} samples")
+                    st.write(f"  - {cls}")
                 
                 st.divider()
                 
@@ -309,7 +347,7 @@ def main():
                 # Occupation input
                 if 'Occupation' in categorical_features:
                     occupation_options = feature_encoders['Occupation'].classes_.tolist() if 'Occupation' in feature_encoders else []
-                    input_dict['Occupation'] = st.selectbox("Occupation", occupation_options)
+                    input_dict['Occupation'] = st.selectbox("Occupation", occupation_options, index=0)
                 
                 # Sleep Duration
                 if 'Sleep Duration' in feature_names:
@@ -331,7 +369,9 @@ def main():
                 # BMI Category
                 if 'BMI Category' in categorical_features:
                     bmi_options = feature_encoders['BMI Category'].classes_.tolist() if 'BMI Category' in feature_encoders else ["Normal", "Overweight", "Obese"]
-                    input_dict['BMI Category'] = st.selectbox("BMI Category", bmi_options)
+                    # Filter out any None values
+                    bmi_options = [opt for opt in bmi_options if opt is not None and str(opt) != 'nan']
+                    input_dict['BMI Category'] = st.selectbox("BMI Category", bmi_options, index=0)
                 
                 # Blood Pressure input
                 if 'Systolic_BP' in feature_names and 'Diastolic_BP' in feature_names:
@@ -362,7 +402,7 @@ def main():
             with col1:
                 if st.button("🧪 Test: Healthy Profile"):
                     # Set values for a healthy person (should predict None)
-                    input_dict = {
+                    st.session_state['test_input'] = {
                         'Age': 30,
                         'Gender': 'Female',
                         'Occupation': 'Engineer',
@@ -377,13 +417,12 @@ def main():
                         'Heart Rate': 68,
                         'Daily Steps': 9000
                     }
-                    st.session_state['test_input'] = input_dict
                     st.rerun()
             
             with col2:
                 if st.button("🧪 Test: Insomnia Profile"):
                     # Set values for insomnia
-                    input_dict = {
+                    st.session_state['test_input'] = {
                         'Age': 35,
                         'Gender': 'Female',
                         'Occupation': 'Teacher',
@@ -398,13 +437,12 @@ def main():
                         'Heart Rate': 78,
                         'Daily Steps': 4000
                     }
-                    st.session_state['test_input'] = input_dict
                     st.rerun()
             
             with col3:
                 if st.button("🧪 Test: Sleep Apnea Profile"):
                     # Set values for sleep apnea
-                    input_dict = {
+                    st.session_state['test_input'] = {
                         'Age': 55,
                         'Gender': 'Male',
                         'Occupation': 'Manager',
@@ -419,7 +457,6 @@ def main():
                         'Heart Rate': 82,
                         'Daily Steps': 4500
                     }
-                    st.session_state['test_input'] = input_dict
                     st.rerun()
             
             # Check if there's a test input in session state
@@ -428,7 +465,7 @@ def main():
                 st.info("Using test profile. You can modify the values above.")
             
             # Prediction button
-            if st.button("🔍 Predict Sleep Disorder", type="primary") or 'test_input' in st.session_state:
+            if st.button("🔍 Predict Sleep Disorder", type="primary"):
                 
                 # Create DataFrame
                 input_data = pd.DataFrame([input_dict])
@@ -445,18 +482,27 @@ def main():
                         if col in input_encoded.columns:
                             # Handle unknown categories
                             try:
-                                input_encoded[col] = feature_encoders[col].transform(input_encoded[col].astype(str))
-                                st.write(f"Encoded {col}: {input_dict[col]} → {input_encoded[col].values[0]}")
-                            except ValueError as e:
-                                st.warning(f"Unknown {col} value '{input_dict[col]}'. Using most common class.")
-                                # Use the most frequent class (0)
+                                val = str(input_encoded[col].values[0])
+                                # Check if value is in encoder classes
+                                if val in feature_encoders[col].classes_:
+                                    input_encoded[col] = feature_encoders[col].transform([val])[0]
+                                    st.write(f"Encoded {col}: {input_dict[col]} → {input_encoded[col].values[0]}")
+                                else:
+                                    st.warning(f"Unknown {col} value '{val}'. Using most common class.")
+                                    # Use the most frequent class (0)
+                                    input_encoded[col] = 0
+                            except Exception as e:
+                                st.warning(f"Error encoding {col}: {str(e)}. Using default.")
                                 input_encoded[col] = 0
                     
                     # Make sure all feature columns are present and in correct order
                     for col in feature_names:
                         if col not in input_encoded.columns:
-                            # For missing numerical columns, use 0
-                            input_encoded[col] = 0
+                            # For missing numerical columns, use median from training
+                            if col in numerical_cols:
+                                input_encoded[col] = 0  # Will be scaled
+                            else:
+                                input_encoded[col] = 0
                             st.write(f"Added missing column {col} with default value 0")
                     
                     # Reorder columns to match feature_names
